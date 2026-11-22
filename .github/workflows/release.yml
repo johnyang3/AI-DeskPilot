@@ -1,0 +1,59 @@
+name: build-and-release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Run tests
+        run: dotnet test tests/DeskPilot.Tests/DeskPilot.Tests.csproj -c Release
+
+      - name: Publish Windows x64 single-file app
+        run: >
+          dotnet publish src/DeskPilot/DeskPilot.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o artifacts/win-x64
+
+      - name: Package ZIP
+        shell: pwsh
+        run: Compress-Archive -Path artifacts/win-x64/* -DestinationPath artifacts/DeskPilot-win-x64.zip -Force
+
+      - name: Generate SHA-256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash artifacts/DeskPilot-win-x64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  DeskPilot-win-x64.zip" | Out-File -Encoding ascii artifacts/DeskPilot-win-x64.zip.sha256
+
+      - name: Read app version
+        id: version
+        shell: pwsh
+        run: |
+          [xml]$csproj = Get-Content src/DeskPilot/DeskPilot.csproj
+          $v = $csproj.Project.PropertyGroup.Version
+          "tag=v$v" | Out-File -Append $env:GITHUB_OUTPUT
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          files: |
+            artifacts/DeskPilot-win-x64.zip
+            artifacts/DeskPilot-win-x64.zip.sha256
